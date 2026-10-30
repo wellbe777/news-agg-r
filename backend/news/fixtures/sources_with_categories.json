@@ -1,0 +1,112 @@
+[
+  {
+    "model": "news.source",
+    "pk": 1,
+    "fields": {
+      "name": "CNN",
+      "homepage": "https://www.cnn.com",
+      "rss_url": "https://rss.cnn.com/rss/edition.rss",
+      "active": true,
+      "categories": [3, 8]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 2,
+    "fields": {
+      "name": "BBC News",
+      "homepage": "https://www.bbc.com",
+      "rss_url": "http://feeds.bbci.co.uk/news/rss.xml",
+      "active": true,
+      "categories": [3, 8]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 3,
+    "fields": {
+      "name": "Reuters",
+      "homepage": "https://www.reuters.com",
+      "rss_url": "http://feeds.reuters.com/reuters/topNews",
+      "active": true,
+      "categories": [2, 3, 8]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 4,
+    "fields": {
+      "name": "The Verge",
+      "homepage": "https://www.theverge.com",
+      "rss_url": "https://www.theverge.com/rss/index.xml",
+      "active": true,
+      "categories": [1]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 5,
+    "fields": {
+      "name": "TechCrunch",
+      "homepage": "https://techcrunch.com",
+      "rss_url": "http://feeds.feedburner.com/TechCrunch/",
+      "active": true,
+      "categories": [1, 2]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 6,
+    "fields": {
+      "name": "NY Times",
+      "homepage": "https://www.nytimes.com",
+      "rss_url": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+      "active": true,
+      "categories": [3, 8]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 7,
+    "fields": {
+      "name": "Hacker News",
+      "homepage": "https://news.ycombinator.com",
+      "rss_url": "https://news.ycombinator.com/rss",
+      "active": true,
+      "categories": [1]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 8,
+    "fields": {
+      "name": "Ars Technica",
+      "homepage": "https://arstechnica.com",
+      "rss_url": "http://feeds.arstechnica.com/arstechnica/index",
+      "active": true,
+      "categories": [1, 4]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 9,
+    "fields": {
+      "name": "Wired",
+      "homepage": "https://www.wired.com",
+      "rss_url": "https://www.wired.com/feed/rss",
+      "active": true,
+      "categories": [1, 7]
+    }
+  },
+  {
+    "model": "news.source",
+    "pk": 10,
+    "fields": {
+      "name": "Guardian",
+      "homepage": "https://www.theguardian.com/international",
+      "rss_url": "https://www.theguardian.com/world/rss",
+      "active": true,
+      "categories": [3, 8, 9]
+    }
+  }
+]

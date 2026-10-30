@@ -1,0 +1,10 @@
+FROM node:20
+
+WORKDIR /app
+
+# Install pnpm reliably (no corepack network fetch)
+RUN npm install -g pnpm@9.15.0
+
+EXPOSE 5173
+
+CMD ["sh", "-c", "pnpm install && pnpm dev --host"]

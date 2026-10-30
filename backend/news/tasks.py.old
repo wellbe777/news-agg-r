@@ -1,0 +1,58 @@
+# backend/news/tasks.py
+from celery import shared_task
+from django.contrib.auth import get_user_model
+from django.core.cache import cache
+from .models import Article, UserInterest, UserArticleInteraction
+from .serializers import ArticleSerializer
+
+User = get_user_model()
+
+@shared_task
+def compute_recommendations_for_user(user_id):
+    """
+    Compute personalized recommendations for a single user.
+    Stores results in Redis cache (key: user:{id}:recommendations).
+    """
+    try:
+        user = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        return None
+    
+    # Gather signals
+    interests = UserInterest.objects.filter(user=user).select_related("category")
+    liked_articles = UserArticleInteraction.objects.filter(user=user, liked=True).values_list("article_id", flat=True)
+
+    qs = Article.objects.all()
+    
+    # Filter if user has category interests
+    if interests.exists():
+        cat_ids = [i.category_id for i in interests]
+        qs = qs.filter(categories__in=cat_ids)
+    
+    # Exclude already liked (avoid repeats)
+    if liked_articles:
+        qs = qs.exclude(id__in=liked_articles)
+
+    # Exclude already viewed
+    viewed = UserArticleInteraction.objects.filter(user=user, viewed=True).values_list("article_id", flat=True)
+    if viewed:
+        qs = qs.exclude(id__in=viewed)
+
+    # Sort by recency to avoid duplicates
+    qs = qs.distinct().order_by("-published_at")[:30]
+
+    serialized = ArticleSerializer(qs, many=True).data
+
+    # # Cache results for 1h
+    cache_key = f"user:{user_id}:recommendations"
+    cache.set(cache_key, serialized, timeout=3600)
+
+    return serialized
+
+def refresh_all_recommendations():
+    """
+    Loop through all users and refresh recommendations asynchronously.
+    Triggered by Celery beat every few hours.
+    """
+    for user_id in User.objects.values_list("id", flat=True):
+        compute_recommendations_for_user.delay(user_id)

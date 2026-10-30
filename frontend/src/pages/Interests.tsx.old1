@@ -1,0 +1,154 @@
+// src/pages/Interests.tsx
+import React, { useEffect, useState } from "react";
+import api from "../api/api";
+
+interface Category {
+  id: number;
+  name: string;
+}
+
+interface Source {
+  id: number;
+  name: string;
+}
+
+const Interests: React.FC = () => {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [sources, setSources] = useState<Source[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<number[]>([]);
+  const [selectedSources, setSelectedSources] = useState<number[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+
+  // 1️⃣ Fetch available categories & sources
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [catRes, srcRes, userRes] = await Promise.all([
+          api.get("/categories/"),
+          api.get("/sources/"),
+          api.get("/user/interests/"),
+        ]);
+
+        setCategories(catRes.data);
+        setSources(srcRes.data);
+
+        // preload saved interests
+        const interests = userRes.data;
+        if (interests) {
+          setSelectedCategories(interests.category_ids || []);
+          setSelectedSources(interests.source_ids || []);
+        }
+      } catch (error) {
+        console.error("Failed to fetch interests:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
+
+  // 2️⃣ Toggle handlers
+  const toggleCategory = (id: number) => {
+    setSelectedCategories((prev) =>
+      prev.includes(id) ? prev.filter((cid) => cid !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSource = (id: number) => {
+    setSelectedSources((prev) =>
+      prev.includes(id) ? prev.filter((sid) => sid !== id) : [...prev, id]
+    );
+  };
+
+  // 3️⃣ Save interests
+  const saveInterests = async () => {
+    setSaving(true);
+    setMessage("");
+    try {
+      await api.post("/user/interests/", {
+        category_ids: selectedCategories,
+        source_ids: selectedSources,
+      });
+      setMessage("✅ Interests saved successfully!");
+    } catch (error) {
+      setMessage("❌ Failed to save interests.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <p className="text-center mt-10 text-gray-500">Loading interests...</p>;
+
+  return (
+    <div className="max-w-5xl mx-auto p-6">
+      <h1 className="text-2xl font-semibold mb-6">Customize Your Feed</h1>
+
+      {message && (
+        <div
+          className={`mb-4 p-3 rounded-lg ${
+            message.startsWith("✅")
+              ? "bg-green-100 text-green-700"
+              : "bg-red-100 text-red-700"
+          }`}
+        >
+          {message}
+        </div>
+      )}
+
+      {/* Categories */}
+      <section className="mb-8">
+        <h2 className="text-xl font-medium mb-3 text-red-500">Select Categories</h2>
+        <div className="flex flex-wrap gap-2">
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              onClick={() => toggleCategory(cat.id)}
+              className={`px-4 py-2 rounded-full border transition ${
+                selectedCategories.includes(cat.id)
+                  ? "bg-blue-600 text-white border-blue-600"
+                  : "bg-gray-100 dark:bg-gray-700 dark:text-gray-300"
+              }`}
+            >
+              {cat.name}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Sources */}
+      <section className="mb-8">
+        <h2 className="text-xl font-medium mb-3 text-red-500">Select Sources</h2>
+        <div className="flex flex-wrap gap-2">
+          {sources.map((src) => (
+            <button
+              key={src.id}
+              onClick={() => toggleSource(src.id)}
+              className={`px-4 py-2 rounded-full border transition ${
+                selectedSources.includes(src.id)
+                  ? "bg-blue-600 text-white border-blue-600"
+                  : "bg-gray-100 dark:bg-gray-700 dark:text-gray-300"
+              }`}
+            >
+              {src.name}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Save button */}
+      <div className="flex justify-end">
+        <button
+          onClick={saveInterests}
+          disabled={saving}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2 rounded-lg transition"
+        >
+          {saving ? "Saving..." : "Save Interests"}
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default Interests;

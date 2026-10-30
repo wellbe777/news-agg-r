@@ -1,0 +1,203 @@
+from datetime import timedelta
+from django.utils import timezone
+from django.core.cache import cache
+from django.db.models import Q, F, Case, When, Value, FloatField
+from django.db.models.functions import Coalesce
+from django.db.models.expressions import Func
+from celery import shared_task
+from django.contrib.auth import get_user_model
+import logging
+import time
+
+from .models import Article, UserInterest, UserArticleInteraction
+
+User = get_user_model()
+
+def compute_recommendations_for_user(user, limit=20, cache_ttl=60 * 15):
+    """
+    Weighted recommender: combines
+      - explicit interests (categories/sources)
+      - implicit signals (likes/views)
+      - recency score
+    Returns top-N ranked articles.
+    """
+
+    now = timezone.now()
+
+    # ----------------------------------------------------------------------
+    # Load interests
+    # ----------------------------------------------------------------------
+    interests, _ = UserInterest.objects.get_or_create(user=user)
+
+    category_ids = list(interests.categories.values_list("id", flat=True))
+    source_ids = list(interests.sources.values_list("id", flat=True))
+
+    # ----------------------------------------------------------------------
+    # Load interactions
+    # ----------------------------------------------------------------------
+    interactions = UserArticleInteraction.objects.filter(user=user)
+    liked_ids  = list(interactions.filter(liked=True).values_list("article_id", flat=True))
+    viewed_ids = list(interactions.filter(viewed=True).values_list("article_id", flat=True))
+
+    # If the user is brand new and has nothing, fall back to latest week
+    if not category_ids and not source_ids and not liked_ids:
+        last_week = now - timedelta(days=7)
+        qs = Article.objects.filter(published_at__gte=last_week)
+        qs = qs.order_by("-published_at")[:limit]
+        return list(qs)
+
+    # ----------------------------------------------------------------------
+    # Build weighted base queryset (everything except viewed ones)
+    # ----------------------------------------------------------------------
+    qs = Article.objects.exclude(id__in=viewed_ids)
+
+    # ----------------------------------------------------------------------
+    # EXPLICIT INTEREST SCORING
+    # ----------------------------------------------------------------------
+    qs = qs.annotate(
+        match_category = Case(
+            When(categories__in=category_ids, then=Value(1.0)),
+            default=Value(0.0),
+            output_field=FloatField(),
+        ),
+        match_source = Case(
+            When(source_id__in=source_ids, then=Value(1.0)),
+            default=Value(0.0),
+            output_field=FloatField(),
+        ),
+    )
+
+    # ----------------------------------------------------------------------
+    # IMPLICIT - USER BEHAVIOR (LIKES)
+    # ----------------------------------------------------------------------
+    if liked_ids:
+        qs = qs.annotate(
+            similar_to_liked = Case(
+                When(
+                    Q(categories__in=Article.objects.filter(id__in=liked_ids).values_list("categories", flat=True))
+                    | Q(source_id__in=Article.objects.filter(id__in=liked_ids).values_list("source_id", flat=True)),
+                    then=Value(1.0)
+                ),
+                default=Value(0.0),
+                output_field=FloatField(),
+            )
+        )
+    else:
+        qs = qs.annotate(similar_to_liked=Value(0.0, output_field=FloatField()))
+
+    # ----------------------------------------------------------------------
+    # RECENCY SCORE (fixed)
+    # ----------------------------------------------------------------------
+    THIRTY_DAYS = 30 * 24 * 60 * 60  # seconds
+
+    qs = qs.annotate(
+        age_seconds=Func(
+            F("published_at"),
+            function="",     # no function name, we control the whole SQL
+            template="EXTRACT(EPOCH FROM (NOW() - %(expressions)s))",
+            output_field=FloatField(),
+        )
+    )
+
+    qs = qs.annotate(
+        score_recency_raw=1.0 - (F("age_seconds") / Value(THIRTY_DAYS))
+    )
+
+    qs = qs.annotate(
+        score_recency=Case(
+            When(score_recency_raw__lt=0, then=Value(0.0)),
+            When(score_recency_raw__gt=1, then=Value(1.0)),
+            default=F("score_recency_raw"),
+            output_field=FloatField(),
+        )
+    )
+
+    # ----------------------------------------------------------------------
+    # FINAL SCORE WEIGHTS
+    # Adjust weights as you like
+    # ----------------------------------------------------------------------
+    qs = qs.annotate(
+        final_score =
+            1.0 * F("match_category") +
+            1.0 * F("match_source") +
+            0.8 * F("similar_to_liked") +
+            0.3 * F("score_recency")
+    )
+
+    # ----------------------------------------------------------------------
+    # ORDER + LIMIT
+    # ----------------------------------------------------------------------
+    qs = qs.order_by("-final_score", "-published_at")[:limit]
+
+    articles = list(qs)
+
+    # ----------------------------------------------------------------------
+    # CACHE RESULTS
+    # ----------------------------------------------------------------------
+    cache_key = f"user:{user.id}:recommendations"
+    cache.set(cache_key, [a.id for a in articles], cache_ttl)
+
+    return articles
+
+
+# -------------------------------
+# Celery Tasks
+# -------------------------------
+
+CACHE_TTL = 60 * 15  # 15 minutes
+CACHE_KEY_FORMAT = "user:{user_id}:recommendations"
+
+
+@shared_task
+def compute_recommendations_task(user_id, limit=20):
+    """
+    Asynchronously recompute recommendations for a single user.
+    Stores ordered list of article IDs under a consistent cache key.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return None
+
+    articles = compute_recommendations_for_user(user, limit=limit)
+    ids = [a.id for a in articles]
+
+    cache_key = CACHE_KEY_FORMAT.format(user_id=user.id)
+    cache.set(cache_key, ids, CACHE_TTL)
+
+    return ids
+
+
+@shared_task
+def compute_recommendations_for_all_users(limit=20):
+    """
+    Recomputation for all users (admin-triggered or scheduled).
+    """
+    results = {}
+    for user in User.objects.all():
+        articles = compute_recommendations_for_user(user, limit=limit)
+        ids = [a.id for a in articles]
+
+        cache_key = CACHE_KEY_FORMAT.format(user_id=user.id)
+        cache.set(cache_key, ids, CACHE_TTL)
+
+        results[user.id] = len(ids)
+
+    return results
+
+
+logger = logging.getLogger(__name__)
+
+@shared_task
+def ping():
+    """Debug task to test Celery setup."""
+    logger.info("pong from Celery!")
+    print("pong from Celery!")  # shows up in worker logs
+    return "pong"
+
+
+@shared_task
+def test_add(x, y):
+    """Simple test task that adds two numbers."""
+    time.sleep(2)  # simulate some work
+    return x + y

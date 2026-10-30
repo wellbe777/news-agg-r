@@ -1,0 +1,18 @@
+FROM node:20
+
+WORKDIR /app
+
+# 🔑 Force Rollup WASM, disable native binaries
+ENV ROLLUP_WASM=true
+ENV npm_config_optional=false
+
+COPY package.json package-lock.json ./
+
+# IMPORTANT: omit optional deps
+RUN npm ci
+
+COPY . .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev", "--", "--host"]

@@ -1,0 +1,192 @@
+import React, { useEffect, useState } from "react";
+import api from "../api/api";
+
+interface Article {
+  id: number;
+  title: string;
+  summary: string;
+  published_at: string;
+  source: { name: string };
+  categories: { id: number; name: string }[];
+  url: string;
+}
+
+interface PaginatedResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: Article[];
+}
+
+export default function Feed() {
+  const [articles, setArticles] = useState<Article[]>([]);
+  const [nextPage, setNextPage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
+  const [sources, setSources] = useState<{ id: number; name: string }[]>([]);
+
+  const [selectedCategory, setSelectedCategory] = useState<string>("");
+  const [selectedSource, setSelectedSource] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  // Fetch categories + sources once
+  useEffect(() => {
+    async function loadFilters() {
+      try {
+        const [catRes, srcRes] = await Promise.all([
+          api.get("/categories/"),
+          api.get("/sources/"),
+        ]);
+        setCategories(catRes.data);
+        setSources(srcRes.data);
+      } catch (err) {
+        console.error("Error loading filters", err);
+      }
+    }
+    loadFilters();
+  }, []);
+
+  // Fetch articles (initial + filters)
+  useEffect(() => {
+    fetchArticles("/articles/");
+  }, [searchQuery, selectedCategory, selectedSource]);
+
+  const fetchArticles = async (url: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params: Record<string, string> = {};
+      if (searchQuery) params.search = searchQuery;
+      if (selectedCategory) params.category = selectedCategory;
+      if (selectedSource) params.source = selectedSource;
+
+      const res = await api.get<PaginatedResponse>(url, { params });
+      setArticles((prev) =>
+        url === "/articles/" ? res.data.results : [...prev, ...res.data.results]
+      );
+      setNextPage(res.data.next);
+    } catch (err) {
+      console.error("Error fetching articles:", err);
+      setError("Failed to load articles");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handlers
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+  };
+  const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedCategory(e.target.value);
+  };
+  const handleSourceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedSource(e.target.value);
+  };
+
+  const loadMore = () => {
+    if (nextPage) fetchArticles(nextPage);
+  };
+
+  return (
+    <div className="p-6 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-4 text-center">📰 News Feed</h1>
+
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-6">
+        <input
+          type="text"
+          placeholder="Search articles..."
+          value={searchQuery}
+          onChange={handleSearchChange}
+          className="border p-2 rounded flex-1"
+        />
+
+        <select
+          value={selectedCategory}
+          onChange={handleCategoryChange}
+          className="border p-2 rounded flex-1"
+        >
+          <option value="">All Categories</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={selectedSource}
+          onChange={handleSourceChange}
+          className="border p-2 rounded flex-1"
+        >
+          <option value="">All Sources</option>
+          {sources.map((s) => (
+            <option key={s.id} value={s.name}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Article List */}
+      {error && <p className="text-red-500">{error}</p>}
+
+      <div className="grid gap-4">
+        {articles.map((article) => (
+          <div
+            key={`${article.id}-${article.source.name}`}
+            className="border rounded-xl p-4 shadow-sm hover:shadow-md transition"
+          >
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-lg font-semibold hover:text-blue-600"
+            >
+              {article.title}
+            </a>
+            <p className="text-gray-600 text-sm mt-1">
+              📰 {article.source?.name || "Unknown Source"} —{" "}
+              {new Date(article.published_at).toLocaleDateString()}
+            </p>
+            <p className="mt-2 text-gray-700">{article.summary}</p>
+
+            {Array.isArray(article.categories) &&
+              article.categories.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {article.categories.map((cat) => (
+                    <span
+                      key={cat.id}
+                      className="bg-gray-200 text-gray-800 text-xs px-2 py-1 rounded-full"
+                    >
+                      {cat.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+          </div>
+        ))}
+      </div>
+
+      {/* Load More */}
+      {nextPage && (
+        <div className="flex justify-center mt-6">
+          <button
+            onClick={loadMore}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
+            disabled={loading}
+          >
+            {loading ? "Loading..." : "Load More"}
+          </button>
+        </div>
+      )}
+
+      {!nextPage && !loading && articles.length > 0 && (
+        <p className="text-center text-gray-500 mt-6">No more articles.</p>
+      )}
+    </div>
+  );
+}

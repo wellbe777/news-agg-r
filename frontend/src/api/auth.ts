@@ -1,0 +1,62 @@
+// src/api/auth.ts
+import api from "../api/axios";
+
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+
+console.log("🌍 API_URL:", API_URL);  //browser console check
+
+// --- Token Storage Helpers ---
+export const getAccessToken = (): string | null => localStorage.getItem("access");
+export const getRefreshToken = (): string | null => localStorage.getItem("refresh");
+
+export const setTokens = (access: string, refresh: string) => {
+  localStorage.setItem("access", access);
+  localStorage.setItem("refresh", refresh);
+};
+
+export const clearTokens = () => {
+  localStorage.removeItem("access");
+  localStorage.removeItem("refresh");
+};
+
+// --- API Calls ---
+export async function loginUser(username: string, password: string) {
+  console.log("🔐 Sending login request:", { username, password });
+  const res = await api.post(`${API_URL}/token/`, { username, password });
+  const { access, refresh } = res.data;
+  setTokens(access, refresh);
+  return res.data;
+}
+
+export async function registerUser(username: string, email: string, password: string) {
+  const res = await api.post(`${API_URL}/register/`, { username, email, password });
+  // Optionally, you can immediately log in here using loginUser()
+  return res.data;
+}
+
+export async function refreshToken(): Promise<{ access: string } | null> {
+  const refresh = localStorage.getItem("refresh");
+  if (!refresh) return null;
+
+  try {
+    const res = await api.post(`${API_URL}/token/refresh/`, { refresh });
+
+    return { access: res.data.access };
+  } catch {
+    clearTokens();
+    return null;
+  }
+}
+
+export async function getCurrentUser() {
+  const token = getAccessToken();
+  if (!token) throw new Error("No token");
+  const res = await api.get(`${API_URL}/user/`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+export function logoutUser() {
+  clearTokens();
+}

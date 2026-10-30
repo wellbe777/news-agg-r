@@ -1,0 +1,25 @@
+# Django core
+Django==5.2
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+django-cors-headers==4.4.0
+django-filter==24.3
+
+# Database
+psycopg[binary,pool]==3.2.1
+
+# Task queue
+celery==5.4.0
+redis==5.0.8
+
+# Search (Postgres FTS supported out of the box)
+# (Optional: if you want OpenSearch/Elasticsearch, add elasticsearch-dsl)
+
+# Utils
+python-dotenv==1.0.1
+requests==2.32.3
+
+# Dev tools
+black==24.8.0
+flake8==7.1.1
+isort==5.13.2

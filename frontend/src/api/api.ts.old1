@@ -1,0 +1,52 @@
+// frontend/src/api/api.ts
+import axios from "axios";
+import { refreshToken } from "./auth";
+
+export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
+
+const api = axios.create({
+  baseURL: API_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+// ✅ Attach access token to each request
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("access");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// ✅ Handle 401 errors: try refresh and retry the original request
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        const newAccess = await refreshToken(); // uses stored refresh token internally
+
+        if (newAccess) {
+          localStorage.setItem("access", newAccess);
+          originalRequest.headers.Authorization = `Bearer ${newAccess}`;
+          return api(originalRequest); // retry the failed request
+        }
+      } catch (refreshError) {
+        console.warn("❌ Token refresh failed, logging out user");
+        localStorage.removeItem("access");
+        localStorage.removeItem("refresh");
+        window.location.href = "/login";
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+export default api;

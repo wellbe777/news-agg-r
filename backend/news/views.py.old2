@@ -1,0 +1,126 @@
+# backend/news/views.py
+from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.db.models import Q
+from rest_framework.views import APIView
+from rest_framework.generics import ListAPIView
+from rest_framework.pagination import CursorPagination
+from django.core.cache import cache
+from .tasks import compute_recommendations_for_user, compute_recommendations_task
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
+
+from .models import Source, Article, Category, UserInterest, UserArticleInteraction
+from .serializers import (
+    SourceSerializer,
+    ArticleSerializer,
+    CategorySerializer,
+    UserInterestSerializer,
+    UserArticleInteractionSerializer,
+)
+
+class SourceViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Source.objects.prefetch_related("categories").all()
+    serializer_class = SourceSerializer
+
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = {
+        "active": ["exact"],
+        "categories__id": ["exact"],       # filter by category ID
+        "categories__slug": ["exact"],     # filter by category slug
+    }
+    search_fields = ["name", "homepage"]
+    ordering_fields = ["name"]
+
+
+class ArticleViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Article.objects.select_related("source").prefetch_related("categories").order_by("-published_at")
+    serializer_class = ArticleSerializer
+    filterset_fields = {"source": ["exact"]}
+    search_fields = ("title", "summary", "content")
+    ordering_fields = ("published_at", "source__name")
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        category_slug = self.request.query_params.get("category")
+        if category_slug:
+            qs = qs.filter(categories__slug=category_slug)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="search")
+    def search(self, request):
+        q = request.query_params.get("q", "")
+        qs = self.get_queryset()
+        if q:
+            qs = qs.filter(Q(title__icontains=q) | Q(summary__icontains=q) | Q(content__icontains=q))
+        page = self.paginate_queryset(qs)
+        return self.get_paginated_response(self.get_serializer(page, many=True).data)
+
+
+class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Category.objects.all().order_by("name")
+    serializer_class = CategorySerializer
+
+
+class UserInterestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        interests, _ = UserInterest.objects.get_or_create(user=request.user)
+        return Response(UserInterestSerializer(interests).data)
+
+    def post(self, request):
+        interests, _ = UserInterest.objects.get_or_create(user=request.user)
+        serializer = UserInterestSerializer(interests, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class UserArticleInteractionViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserArticleInteractionSerializer
+
+    def get_queryset(self):
+        return UserArticleInteraction.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class RecommendationCursorPagination(CursorPagination):
+    page_size = 20
+    ordering = "-published_at"  # newest articles first
+
+
+class RecommendationView(ListAPIView):
+    """
+    Return paginated personalized article recommendations.
+
+    Behavior:
+    - Try to fetch cached article IDs for this user.
+    - If cache miss → compute recommendations synchronously (and optionally async with Celery).
+    - Always return fresh serialized articles.
+    - Supports pagination via ?page=2.
+    """
+    serializer_class = ArticleSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = RecommendationCursorPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        key = f"user:{user.id}:recommendations"
+
+        ids = cache.get(key)
+
+        if ids is None:
+            # Compute immediately so user always gets a response
+            articles = compute_recommendations_for_user(user)
+            # Optionally trigger async task in background
+            # compute_recommendations_task.delay(user.id)
+            return articles
+
+        # Cached IDs exist → query DB fresh
+        return Article.objects.filter(id__in=ids).order_by("-published_at")

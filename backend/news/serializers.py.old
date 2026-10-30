@@ -1,0 +1,26 @@
+from rest_framework import serializers
+from .models import Article, Category, UserInterest
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ["id", "name"]
+
+class ArticleSerializer(serializers.ModelSerializer):
+    category = CategorySerializer()
+
+    class Meta:
+        model = Article
+        fields = "__all__"
+
+    def create(self, validated_data):
+        category_data = validated_data.pop("category", None)
+        if category_data:
+            category, _ = Category.objects.get_or_create(name=category_data["name"])
+            validated_data["category"] = category
+        return Article.objects.create(**validated_data)
+
+class UserInterestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserInterest
+        fields = "__all__"

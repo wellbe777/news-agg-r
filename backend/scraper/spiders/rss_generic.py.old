@@ -1,0 +1,42 @@
+import scrapy
+import feedparser
+from datetime import datetime
+
+
+class RSSSpider(scrapy.Spider):
+    name = "rss"
+    custom_settings = {
+        "DOWNLOAD_DELAY": 1,
+    }
+
+    def __init__(self, feed_url=None, source_name="GenericRSS", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not feed_url:
+            raise ValueError("You must provide a feed_url argument, e.g. -a feed_url=https://example.com/rss")
+        self.feed_url = feed_url
+        self.source_name = source_name
+
+    def start_requests(self):
+        yield scrapy.Request(self.feed_url, callback=self.parse_feed)
+
+    def parse_feed(self, response):
+        feed = feedparser.parse(response.text)
+        for entry in feed.entries:
+            published_at = None
+            if hasattr(entry, "published"):
+                try:
+                    published_at = datetime(*entry.published_parsed[:6])
+                except Exception:
+                    pass
+
+            yield {
+                "url": entry.link,
+                "title": entry.title,
+                "summary": getattr(entry, "summary", ""),
+                "content": getattr(entry, "description", ""),
+                "author": getattr(entry, "author", ""),
+                "image_url": None,
+                "published_at": published_at,
+                "categories": getattr(entry, "tags", []),
+                "source_name": self.source_name,
+            }

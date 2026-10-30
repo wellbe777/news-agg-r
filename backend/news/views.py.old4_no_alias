@@ -1,0 +1,142 @@
+# backend/news/views.py
+from rest_framework import viewsets, status
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.db.models import F
+from rest_framework.views import APIView
+#from rest_framework.generics import ListAPIView
+#from rest_framework.pagination import CursorPagination
+from django.core.cache import cache
+from .tasks import compute_recommendations_for_user, compute_recommendations_task
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.filters import SearchFilter, OrderingFilter
+from django.contrib.postgres.search import SearchQuery, SearchRank
+
+from .models import Source, Article, Category, UserInterest, UserArticleInteraction
+from .serializers import (
+    SourceSerializer,
+    ArticleSerializer,
+    CategorySerializer,
+    UserInterestSerializer,
+    UserArticleInteractionSerializer,
+)
+
+
+class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Category.objects.all().order_by("name")
+    serializer_class = CategorySerializer
+
+
+class SourceViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Source.objects.prefetch_related("categories").all()
+    serializer_class = SourceSerializer
+
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = {
+        "active": ["exact"],
+        "categories__id": ["exact"],       # filter by category ID
+        "categories__slug": ["exact"],     # filter by category slug
+    }
+    search_fields = ["name", "homepage"]
+    ordering_fields = ["name"]
+
+
+class ArticleViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ArticleSerializer
+    permission_classes = [AllowAny]
+
+    # allow ordering when not searching
+    ordering_fields = ("published_at", "title", "source__name")
+    ordering = ("-published_at",)
+
+    def get_queryset(self):
+        qs = Article.objects.all().select_related("source").prefetch_related("categories")
+
+        query = self.request.query_params.get("search")
+        if query:
+            # enforce relevance-first ordering when searching
+            search_query = SearchQuery(query)
+            qs = qs.annotate(
+                rank=SearchRank(F("search_vector"), search_query, weights=[0.3, 0.6, 1.0])
+            ).filter(search_vector=search_query).order_by("-rank", "-published_at")
+        else:
+            # respect manual ordering when no search
+            qs = qs.order_by(*self.ordering)
+
+        return qs
+
+
+class UserInterestView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        interests, _ = UserInterest.objects.get_or_create(user=request.user)
+        return Response(UserInterestSerializer(interests).data)
+
+    def post(self, request):
+        interests, _ = UserInterest.objects.get_or_create(user=request.user)
+        serializer = UserInterestSerializer(interests, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class UserArticleInteractionViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserArticleInteractionSerializer
+
+    def get_queryset(self):
+        return UserArticleInteraction.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class RecommendationViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = ArticleSerializer
+    permission_classes = [IsAuthenticated]
+
+    # allow ordering when no search
+    ordering_fields = ("published_at", "title", "source__name")
+    ordering = ("-published_at",)
+
+    def get_queryset(self):
+        user = self.request.user
+        key = f"user:{user.id}:recommendations"
+        cached_ids = cache.get(key)
+
+        if cached_ids is None:
+            articles = compute_recommendations_for_user(user)
+            cached_ids = [a.id for a in articles]
+            cache.set(key, cached_ids, 3600)
+
+        qs = Article.objects.filter(id__in=cached_ids).select_related("source").prefetch_related("categories")
+
+        query = self.request.query_params.get("search")
+        if query:
+            # Always rank by relevance + recency when searching
+            search_query = SearchQuery(query)
+            qs = qs.annotate(
+                rank=SearchRank(F("search_vector"), search_query, weights=[0.3, 0.6, 1.0])
+            ).filter(search_vector=search_query).order_by("-rank", "-published_at")
+        else:
+            # Use ordering params when not searching
+            qs = qs.order_by(*self.ordering)
+
+        return qs
+
+    @action(detail=False, methods=["post"], url_path="refresh")
+    def refresh(self, request):
+        """Trigger async recomputation via Celery"""
+        compute_recommendations_task.delay(request.user.id)
+        return Response({"ok": True, "message": "Recomputing recommendations"})
+    
+    @action(detail=False, methods=["post"], url_path="refresh_all", permission_classes=[IsAdminUser])
+    def refresh_all(self, request):
+        """Admin-only: recompute recommendations for all users asynchronously."""
+        from .tasks import compute_recommendations_for_all_users
+        compute_recommendations_for_all_users.delay()
+        return Response({"status": "global refresh started"}, status=status.HTTP_202_ACCEPTED)
+
+

@@ -1,0 +1,106 @@
+import React, { useEffect, useState } from "react";
+import api from "../api/api";
+
+interface Article {
+  id: number;
+  title: string;
+  summary: string;
+  url: string;
+  image_url?: string;
+  published_at: string;
+}
+
+interface PaginatedResponse {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: Article[];
+}
+
+const Feed: React.FC = () => {
+  const [articles, setArticles] = useState<Article[]>([]);
+  const [nextUrl, setNextUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchArticles = async (url?: string) => {
+    setLoading(true);
+    try {
+      const res = await api.get<PaginatedResponse>(url || "/articles/");
+      const data = res.data;
+
+      const newArticles = (data.results || (data as unknown as Article[])) as Article[];
+      setArticles((prev) => (url ? [...prev, ...newArticles] : newArticles));
+      setNextUrl(data.next || null);
+      setError(null);
+    } catch (err) {
+      console.error("Error fetching articles:", err);
+      setError("Failed to load articles.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchArticles();
+  }, []);
+
+  return (
+    <div className="container mx-auto px-4 py-6">
+      <h1 className="text-2xl font-bold mb-6 text-center">📰 Latest Articles</h1>
+
+      {loading && articles.length === 0 && (
+        <p className="text-center text-gray-500">Loading articles...</p>
+      )}
+
+      {error && <p className="text-center text-red-500 mb-4">{error}</p>}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {articles.map((article) => (
+          <div
+            key={article.id}
+            className="bg-white border rounded-2xl shadow-sm overflow-hidden hover:shadow-lg transition-shadow"
+          >
+            {article.image_url && (
+              <img
+                src={article.image_url}
+                alt={article.title}
+                className="w-full h-40 object-cover"
+              />
+            )}
+            <div className="p-4">
+              <h2 className="font-semibold text-lg mb-2">{article.title}</h2>
+              <p className="text-sm text-gray-600 mb-3">
+                {article.summary?.slice(0, 120)}...
+              </p>
+              <a
+                href={article.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:underline text-sm"
+              >
+                Read more →
+              </a>
+              <p className="text-xs text-gray-400 mt-2">
+                Published: {new Date(article.published_at).toLocaleDateString()}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {nextUrl && !loading && (
+        <div className="flex justify-center mt-6">
+          <button
+            onClick={() => fetchArticles(nextUrl)}
+            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+          >
+            Load more
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Feed;

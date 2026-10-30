@@ -1,0 +1,74 @@
+// src/pages/Login.tsx
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { API_URL, api} from "../api/api";
+import { useAuth } from "../context/AuthContext";
+
+const Login: React.FC = () => {
+  const navigate = useNavigate();
+  const { login } = useAuth(); // ✅ use login instead of loginUser
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    
+    console.log("🔗 Testing token endpoint:", `${API_URL}/token/`);
+    try {
+      // Get JWT tokens from Django
+      const tokenRes = await api.post("/token/", { username, password });
+      const { access } = tokenRes.data;  //refresh was as arg 
+
+      // Optionally fetch user info (if you have an endpoint for it)
+      const userRes = await api.get("/user/", {
+        headers: { Authorization: `Bearer ${access}` },
+      });
+
+      // ✅ Store tokens + user data via AuthContext
+      login(userRes.data, access);  //refresh was as arg
+
+      navigate("/feed");
+    } catch (err: any) {
+      console.error(err);
+      setError("Invalid username or password");
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-50">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white p-6 rounded-2xl shadow-md w-full max-w-md"
+      >
+        <h2 className="text-2xl font-semibold text-center mb-4">Sign In</h2>
+        {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
+
+        <input
+          type="text"
+          placeholder="Username"
+          className="border p-2 w-full mb-3 rounded"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+        />
+        <input
+          type="password"
+          placeholder="Password"
+          className="border p-2 w-full mb-3 rounded"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+
+        <button
+          type="submit"
+          className="bg-blue-600 text-white w-full py-2 rounded hover:bg-blue-700"
+        >
+          Log In
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default Login;

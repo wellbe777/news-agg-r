@@ -1,0 +1,134 @@
+from datetime import timedelta
+from django.utils import timezone
+from django.core.cache import cache
+from django.db.models import Q
+from celery import shared_task
+from django.contrib.auth import get_user_model
+import logging
+import time
+
+from .models import Article, UserInterest, UserArticleInteraction
+
+User = get_user_model()
+
+def compute_recommendations_for_user(user, limit=20, cache_ttl=60*15):
+    """
+    Compute recommendations for a user based on explicit interests (categories/sources)
+    and implicit behavior (likes/views). Cache results for faster retrieval.
+    """
+    interests, _ = UserInterest.objects.get_or_create(user=user)
+
+    # Start with all articles
+    qs = Article.objects.all()
+
+    # -------------------------------
+    # 1) Explicit Interests (UserInterest)
+    # -------------------------------
+    if interests.categories.exists():
+        qs = qs.filter(categories__in=interests.categories.all())
+
+    if interests.sources.exists():
+        qs = qs.filter(source__in=interests.sources.all())
+
+    # -------------------------------
+    # 2) Implicit Behavior (UserArticleInteraction)
+    # -------------------------------
+    interactions = UserArticleInteraction.objects.filter(user=user)
+
+    liked_ids = interactions.filter(liked=True).values_list("article_id", flat=True)
+    viewed_ids = interactions.filter(viewed=True).values_list("article_id", flat=True)
+
+    # Boost similar to liked articles
+    if liked_ids.exists():
+        liked_articles = Article.objects.filter(id__in=liked_ids)
+        liked_cats = liked_articles.values_list("categories", flat=True)
+        liked_sources = liked_articles.values_list("source_id", flat=True)
+
+        qs = qs | Article.objects.filter(
+            Q(categories__in=liked_cats) | Q(source_id__in=liked_sources)
+        )
+
+    # Avoid re-recommending already viewed articles
+    if viewed_ids.exists():
+        qs = qs.exclude(id__in=viewed_ids)
+
+    # -------------------------------
+    # 3) Fallback: Recent Articles
+    # -------------------------------
+    if (
+        not interests.categories.exists()
+        and not interests.sources.exists()
+        and not liked_ids.exists()
+    ):
+        last_week = timezone.now() - timedelta(days=7)
+        qs = Article.objects.filter(published_at__gte=last_week)
+
+    # -------------------------------
+    # Finalize Query
+    # -------------------------------
+    qs = qs.distinct().order_by("-published_at")[:limit]
+
+    # Cache result
+    cache_key = f"user:{user.id}:recommendations"
+    cache.set(cache_key, list(qs.values_list("id", flat=True)), cache_ttl)
+
+    return list(qs)
+
+
+# -------------------------------
+# Celery Tasks
+# -------------------------------
+
+@shared_task
+def compute_recommendations_task(user_id, limit=20):
+    """
+    Run recommendation computation for a single user (async).
+    Also refreshes the cache so next GET uses new results immediately.
+    """
+    User = get_user_model()
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return None
+
+    articles = compute_recommendations_for_user(user, limit=limit)
+    ids = [a.id for a in articles]
+
+    cache.set(f"recommendations:{user.id}", ids, 3600)  # update cache for 1h
+    return ids
+
+
+@shared_task
+def compute_recommendations_for_all_users(limit=20):
+    """
+    Recompute recommendations for all users (async).
+    Refreshes the cache for each user.
+    """
+    User = get_user_model()
+    all_users = User.objects.all()
+
+    updated = {}
+    for user in all_users:
+        articles = compute_recommendations_for_user(user, limit=limit)
+        ids = [a.id for a in articles]
+        cache.set(f"recommendations:{user.id}", ids, 3600)
+        updated[user.id] = len(ids)
+
+    return updated
+
+
+logger = logging.getLogger(__name__)
+
+@shared_task
+def ping():
+    """Debug task to test Celery setup."""
+    logger.info("pong from Celery!")
+    print("pong from Celery!")  # shows up in worker logs
+    return "pong"
+
+
+@shared_task
+def test_add(x, y):
+    """Simple test task that adds two numbers."""
+    time.sleep(2)  # simulate some work
+    return x + y

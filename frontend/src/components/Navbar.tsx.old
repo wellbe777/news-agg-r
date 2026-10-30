@@ -1,0 +1,63 @@
+import { Link } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+
+export default function Navbar() {
+  const { user, logout } = useAuth();
+
+  return (
+    <nav className="w-screen bg-gray-800 text-white shadow-md">
+      <div className="max-w-6xl mx-auto px-4">
+        <div className="flex justify-between items-center h-16">
+          {/* Left side — app name */}
+          <Link
+            to="/"
+            className="text-xl font-semibold hover:text-indigo-400 transition-colors"
+          >
+            NewsAgg
+          </Link>
+
+          {/* Right side — nav links */}
+          <div className="flex space-x-6 items-center">
+            {user ? (
+              <>
+                <Link
+                  to="/feed"
+                  className="hover:text-indigo-400 transition-colors"
+                >
+                  Feed
+                </Link>
+                <Link
+                  to="/recommendations"
+                  className="hover:text-indigo-400 transition-colors"
+                >
+                  Recommendations
+                </Link>
+                <button
+                  onClick={logout}
+                  className="bg-indigo-500 px-3 py-1 rounded hover:bg-indigo-600 transition-colors"
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <>
+                <Link
+                  to="/login"
+                  className="hover:text-indigo-400 transition-colors"
+                >
+                  Login
+                </Link>
+                <Link
+                  to="/register"
+                  className="hover:text-indigo-400 transition-colors"
+                >
+                  Register
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
